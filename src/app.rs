@@ -96,9 +96,9 @@ impl App {
         let mut constraints: Vec<Constraint> = Vec::new();
         for (i, _) in self.digits.into_iter().enumerate() {
             constraints.push(Constraint::Length(15));
-            if i % 3 == 2 {
-                constraints.push(Constraint::Length(10));
-            }
+            // if i % 3 == 2 {
+            //     constraints.push(Constraint::Length(10));
+            // }
         }
         let chunks = Layout::default()
             .direction(Direction::Horizontal)
@@ -117,13 +117,25 @@ impl App {
             let figure = standard_font.convert(&format!("{}", digit.current_time)).unwrap();
             frame.render_widget(Paragraph::new(format!("\n{}", figure)).alignment(Alignment::Center).block(digit_box.clone()), chunks[i]);
             if self.digits[i].transition > 0 {
+                let mut direction = Direction::Vertical;
+                if (self.direction[i] % 2) == 1 {
+                    direction = Direction::Horizontal;
+                }
+                let (constraint, chunk_index) = {
+                    let constraint =  min(((100 * digit.transition) / digit.transition_timing) as u16, 100);
+                    if self.direction[i] > 1 {
+                        ([Constraint::Percentage(100 - constraint), Constraint::Percentage(constraint)], 1)
+                    } else {
+                        ([Constraint::Percentage(constraint), Constraint::Percentage(0)], 0)
+                    }
+                };
                 let chunks = Layout::default()
-                    .direction(Direction::Vertical)
-                    .constraints([Constraint::Percentage(((100 * digit.transition) / digit.transition_timing) as u16), Constraint::Percentage(0)])
+                    .direction(direction)
+                    .constraints(constraint)
                     .split(chunks[i]);
-                frame.render_widget(Clear, chunks[0]);
+                frame.render_widget(Clear, chunks[chunk_index]);
                 let figure = standard_font.convert(&format!("{}", digit.new_time)).unwrap().to_string();
-                frame.render_widget(Paragraph::new(format!("\n{}", figure)).alignment(Alignment::Center).block(transition_box.clone()), chunks[0]);
+                frame.render_widget(Paragraph::new(format!("\n{}", figure)).alignment(Alignment::Center).block(transition_box.clone()), chunks[chunk_index]);
             }
         }
     }

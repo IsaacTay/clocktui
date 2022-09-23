@@ -1,6 +1,9 @@
-use std::error;
+use std::cmp::min;
+use std::sync::Arc;
+use std::{error, thread};
 use std::time::Duration;
 
+use crossterm::event::Event;
 use figlet_rs::FIGfont;
 use tui::backend::Backend;
 use tui::layout::{Layout, Direction, Constraint, Alignment};
@@ -8,6 +11,8 @@ use tui::terminal::Frame;
 use tui::widgets::{Block, Borders, Paragraph, BorderType, Clear};
 
 use chrono::{self, Timelike};
+
+use crate::event::EventHandler;
 
 /// Application result type.
 pub type AppResult<T> = std::result::Result<T, Box<dyn error::Error>>;
@@ -32,42 +37,54 @@ impl Digit {
     }
 }
 
+const DIGITS: usize = 6;
+
 /// Application.
 #[derive(Debug)]
 pub struct App {
     pub running: bool,
-    digits: [Digit; 6],
+    pub transitioning: bool,
+    digits: [Digit; DIGITS],
+    direction: [u8; DIGITS]
 }
 
 impl Default for App {
     fn default() -> Self {
-        Self { running: true, digits: [Digit::default(); 6] }
+        Self { running: true, transitioning: true, digits: [Digit::default(); DIGITS], direction: [0; DIGITS] }
     }
 }
 
 impl App {
     /// Constructs a new instance of [`App`].
     pub fn new(transition_timing: u32) -> Self {
-        Self { running: true, digits: [Digit::new(transition_timing); 6] }
+        Self { running: true, transitioning: true, digits: [Digit::new(transition_timing); DIGITS], direction: [0; DIGITS] }
     }
 
     /// Handles the tick event of the terminal.
-    pub fn tick(&mut self, duration: Duration) {
+    pub fn logic_tick(&mut self, duration: Duration, event: &EventHandler) {
         let t = chrono::offset::Local::now();
         let t = [t.hour(), t.minute(), t.second()];
         for (i, t) in t.iter().enumerate() {
             self.digits[2*i].new_time = t/10;
             self.digits[1+2*i].new_time = t%10;
         }
-        for d in self.digits.as_mut() {
+        event.transitioning(true);
+    }
+
+    pub fn render_tick(&mut self, duration: Duration, event: &EventHandler) {
+        let mut transitioning = false;
+        for (i, d) in self.digits.as_mut().iter_mut().enumerate() {
             if d.transition > d.transition_timing {
                 d.transition = 0;
+                self.direction[i] = (self.direction[i] + 1) % 4;
                 d.current_time = d.new_time;
             }
             if d.new_time != d.current_time {
+                transitioning = true;
                 d.transition += duration.as_millis() as u32;
             }
         }
+        event.transitioning(transitioning);
     }
 
     /// Renders the user interface widgets.
@@ -77,8 +94,11 @@ impl App {
         // - https://docs.rs/tui/0.16.0/tui/widgets/index.html
         // - https://github.com/fdehau/tui-rs/tree/v0.16.0/examples
         let mut constraints: Vec<Constraint> = Vec::new();
-        for _ in self.digits {
-            constraints.push(Constraint::Length(15))
+        for (i, _) in self.digits.into_iter().enumerate() {
+            constraints.push(Constraint::Length(15));
+            if i % 3 == 2 {
+                constraints.push(Constraint::Length(10));
+            }
         }
         let chunks = Layout::default()
             .direction(Direction::Horizontal)

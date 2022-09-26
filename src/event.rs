@@ -2,7 +2,7 @@ use crate::app::AppResult;
 use crossterm::event::{self, Event as CrosstermEvent, KeyEvent, MouseEvent};
 use std::borrow::BorrowMut;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex, Condvar};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -31,7 +31,7 @@ pub struct EventHandler {
     /// Event handler thread.
     handlers: [thread::JoinHandle<()>; 2],
 
-    transitioning: Arc<AtomicBool>,
+    transitioning: Arc<(Mutex<bool>, Condvar)>,
 }
 
 impl EventHandler {
@@ -40,7 +40,7 @@ impl EventHandler {
         let tick_rate = Duration::from_millis(tick_rate);
         let render_tick_rate = Duration::from_millis(render_tick_rate);
         let (sender, receiver) = mpsc::channel();
-        let transitioning = Arc::new(AtomicBool::new(false));
+        let transitioning = Arc::new((Mutex::new(false), Condvar::new()));
         let handlers = [
             {
                 let mut last_tick = Instant::now();
@@ -76,12 +76,15 @@ impl EventHandler {
                 let sender = sender.clone();
                 let mut last_tick = Instant::now();
                 thread::spawn(move || {
+                    let (transitioning, cvar) = &*transitioning;
                     loop {
-                        if last_tick.elapsed() >= render_tick_rate {
-                            if transitioning.load(Ordering::Acquire) {
+                        drop(cvar.wait(transitioning.lock().unwrap()).unwrap());
+                        last_tick = Instant::now();
+                        while *transitioning.lock().unwrap() {
+                            if last_tick.elapsed() >= render_tick_rate {
                                 sender.send(Event::RenderTick(last_tick.elapsed())).expect("failed to send tick event");
+                                last_tick = Instant::now();
                             }
-                            last_tick = Instant::now();
                         }
                     }
                 })
@@ -103,7 +106,12 @@ impl EventHandler {
         Ok(self.receiver.recv()?)
     }
 
-    pub fn transitioning(&self, transitioning: bool) {
-        self.transitioning.store(transitioning, Ordering::Release);
+    pub fn transitioning(&self, new_transitioning: bool) {
+        let (transitioning, cvar) = &*self.transitioning;
+        let mut transitioning = transitioning.lock().unwrap();
+        if !*transitioning && new_transitioning {
+            cvar.notify_one();
+        }
+        *transitioning = new_transitioning;
     }
 }

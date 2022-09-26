@@ -27,7 +27,7 @@ struct Digit {
 
 impl Default for Digit {
     fn default() -> Self {
-        Self {transition: 501, transition_timing: 500, new_time: 0, current_time: 0}
+        Self {transition: 251, transition_timing: 250, new_time: 0, current_time: 0}
     }
 }
 

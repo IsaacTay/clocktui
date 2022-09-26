@@ -82,7 +82,6 @@ impl EventHandler {
                                 sender.send(Event::RenderTick(last_tick.elapsed())).expect("failed to send tick event");
                             }
                             last_tick = Instant::now();
-                            thread::sleep(render_tick_rate);
                         }
                     }
                 })

@@ -13,7 +13,7 @@ fn main() -> AppResult<()> {
     // Initialize the terminal user interface.
     let backend = CrosstermBackend::new(io::stderr());
     let terminal = Terminal::new(backend).expect("Failed to interface with the terminal");
-    let events = EventHandler::new(200, 10);
+    let events = EventHandler::new(200, 20);
     let mut tui = Tui::new(terminal, events);
     tui.init()?;
 

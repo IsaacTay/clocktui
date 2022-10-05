@@ -23,8 +23,8 @@ fn main() -> AppResult<()> {
         tui.draw(&mut app)?;
         // Handle events.
         match tui.events.next()? {
-            Event::LogicTick(duration) => app.logic_tick(duration, &tui.events),
-            Event::RenderTick(duration) => app.render_tick(duration, &tui.events),
+            Event::LogicTick(duration) => app.tick_logic(duration, &tui.events),
+            Event::RenderTick(duration) => app.tick_render(duration, &tui.events),
             Event::Key(key_event) => handle_key_events(key_event, &mut app)?,
             Event::Mouse(_) => {}
             Event::Resize(_, _) => {}

@@ -1,90 +1,155 @@
-use std::cmp::min;
-use std::sync::Arc;
-use std::{error, thread};
+use std::error;
+use std::fmt::Display;
 use std::time::Duration;
 
-use crossterm::event::Event;
 use figlet_rs::FIGfont;
 use tui::backend::Backend;
 use tui::layout::{Layout, Direction, Constraint, Alignment};
 use tui::terminal::Frame;
 use tui::widgets::{Block, Borders, Paragraph, BorderType, Clear};
 
-use chrono::{self, Timelike};
+use chrono::prelude::*;
 
 use crate::event::EventHandler;
 
 /// Application result type.
 pub type AppResult<T> = std::result::Result<T, Box<dyn error::Error>>;
 
-#[derive(Debug, Clone, Copy)]
-struct Digit {
-    pub transition: u32,
-    pub transition_timing: u32,
-    pub new_time: u32,
-    pub current_time: u32,
+#[derive(Debug, Clone, Default)]
+struct TokenBlock {
+    pub is_constant: bool,
+    pub transition_progress: u128,
+    pub transition_timing: u128,
+    pub size: usize,
+    pub curr_token: String,
+    pub new_token: String,
 }
 
-impl Default for Digit {
-    fn default() -> Self {
-        Self {transition: 251, transition_timing: 250, new_time: 0, current_time: 0}
+#[derive(Debug, Clone)]
+struct Token {
+    pub format_string: String,
+    pub blocks: Vec<TokenBlock>
+}
+
+#[derive(Debug, Clone)]
+struct AnimatedTime {
+    pub format_tokens: Vec<Token>,
+    timing: u128
+}
+
+impl AnimatedTime {
+    pub fn new() -> Self {        
+        Self { format_tokens: Vec::new(), timing: 250 }.set_format("%X")
+    }
+
+    pub fn set_timing(mut self, timing: u128) -> Self {
+        for token in &mut self.format_tokens {
+            for block in &mut token.blocks {
+                block.transition_timing = self.timing;
+            }
+        }
+        
+        self
+    }
+
+    pub fn set_format(mut self, format_string: &str) -> Self {
+        let max_dt = Local.ymd(3000, 11, 11).and_hms_nano(12, 11, 11, 111111111);
+        let min_dt = Local.ymd(2222, 2, 2).and_hms_nano(1, 0, 0, 0);
+        // let max_dt = Local::now();
+        // let min_dt = Local::now();
+
+        self.format_tokens.clear();
+
+        let mut token = String::new();
+        for ch in format_string.to_string().chars() {
+            token.push(ch);
+            if !token.starts_with('%') || token.len() > 2 || (token.len() == 2 && !"-_0".contains(ch)) {
+                let max_dt = max_dt.format(&token).to_string();
+                let min_dt = min_dt.format(&token).to_string();
+
+                let mut blocks: Vec<TokenBlock> = Vec::new();
+                if min_dt.len() != max_dt.len() {
+                    blocks.push(TokenBlock { is_constant: max_dt == min_dt, transition_progress: 0, transition_timing: self.timing, size: min_dt.len().max(max_dt.len()), ..TokenBlock::default() });
+                } else {
+                    for (min_ch, max_ch) in min_dt.chars().zip(max_dt.chars()) {
+                        blocks.push(TokenBlock{ is_constant: min_ch == max_ch, transition_progress: 0, transition_timing: self.timing, size: 1, ..TokenBlock::default()});
+                    }
+                }
+                self.format_tokens.push(Token {format_string: token, blocks});
+                token = String::new();
+            }
+        }
+
+        self.tick_logic();
+        for token in &mut self.format_tokens {
+            for block in &mut token.blocks {
+                block.curr_token = block.new_token.clone();
+            }
+        }
+
+        self
+    }
+
+    pub fn tick_logic(&mut self) {
+        let dt = Local::now(); // Add timezone stuff
+        for token in &mut self.format_tokens {
+            let time_string = dt.format(&token.format_string).to_string();
+            let mut time_chars = time_string.chars();
+            for block in &mut token.blocks {
+                block.new_token = (&mut time_chars).take(block.size).collect();
+            }
+        }
+    }
+
+    pub fn tick_render(&mut self, duration: Duration) -> bool {
+        let mut is_transitioning = false;
+        let duration = duration.as_millis();
+        for token in &mut self.format_tokens {
+            for block in &mut token.blocks {
+                if block.is_constant {
+                    // continue
+                } else if block.transition_progress > block.transition_timing {
+                    block.transition_progress = 0;
+                    block.curr_token = block.new_token.clone();
+                } else if block.new_token != block.curr_token {
+                    is_transitioning = true;
+                    block.transition_progress += duration;
+                }
+            }
+        }
+        is_transitioning
     }
 }
-
-impl Digit {
-    pub fn new(transition_timing: u32) -> Self {
-        Self { transition: transition_timing, transition_timing, new_time: 0, current_time: 0}
-    }
-}
-
-const DIGITS: usize = 6;
 
 /// Application.
 #[derive(Debug)]
 pub struct App {
     pub running: bool,
-    pub transitioning: bool,
-    digits: [Digit; DIGITS],
-    direction: [u8; DIGITS]
+    animated_time: AnimatedTime,
+    direction: u8
 }
 
 impl Default for App {
     fn default() -> Self {
-        Self { running: true, transitioning: true, digits: [Digit::default(); DIGITS], direction: [0; DIGITS] }
+        Self { running: true, animated_time: AnimatedTime::new(), direction: 0 }
     }
 }
 
 impl App {
     /// Constructs a new instance of [`App`].
-    pub fn new(transition_timing: u32) -> Self {
-        Self { running: true, transitioning: true, digits: [Digit::new(transition_timing); DIGITS], direction: [0; DIGITS] }
+    pub fn new(transition_timing: u128) -> Self {
+        Self { animated_time: AnimatedTime::new().set_timing(transition_timing) , ..App::default() }
     }
 
     /// Handles the tick event of the terminal.
-    pub fn logic_tick(&mut self, duration: Duration, event: &EventHandler) {
-        let t = chrono::offset::Local::now();
-        let t = [t.hour(), t.minute(), t.second()];
-        for (i, t) in t.iter().enumerate() {
-            self.digits[2*i].new_time = t/10;
-            self.digits[1+2*i].new_time = t%10;
-        }
-        event.transitioning(true);
+    pub fn tick_logic(&mut self, duration: Duration, event: &EventHandler) {
+        self.animated_time.tick_logic();
+        event.trigger_animation(true);
     }
 
-    pub fn render_tick(&mut self, duration: Duration, event: &EventHandler) {
-        let mut transitioning = false;
-        for (i, d) in self.digits.as_mut().iter_mut().enumerate() {
-            if d.transition > d.transition_timing {
-                d.transition = 0;
-                self.direction[i] = (self.direction[i] + 1) % 4;
-                d.current_time = d.new_time;
-            }
-            if d.new_time != d.current_time {
-                transitioning = true;
-                d.transition += duration.as_millis() as u32;
-            }
-        }
-        event.transitioning(transitioning);
+    pub fn tick_render(&mut self, duration: Duration, event: &EventHandler) {
+        let is_transitioning = self.animated_time.tick_render(duration);
+        event.trigger_animation(is_transitioning);
     }
 
     /// Renders the user interface widgets.
@@ -94,16 +159,21 @@ impl App {
         // - https://docs.rs/tui/0.16.0/tui/widgets/index.html
         // - https://github.com/fdehau/tui-rs/tree/v0.16.0/examples
         let mut constraints: Vec<Constraint> = Vec::new();
-        for (i, _) in self.digits.into_iter().enumerate() {
-            constraints.push(Constraint::Length(15));
-            // if i % 3 == 2 {
-            //     constraints.push(Constraint::Length(10));
-            // }
+        let mut width: usize = 0;
+        for tokens in &self.animated_time.format_tokens {
+            for block in &tokens.blocks {
+                let size = block.size * match block.is_constant {
+                    true => 8,
+                    false => 15
+                };
+                constraints.push(Constraint::Length(size as u16));
+                width += size
+            }
         }
         let chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints(constraints.as_slice())
-            .horizontal_margin((frame.size().width - 15 * 6) / 2)
+            .horizontal_margin((frame.size().width - width as u16) / 2)
             .vertical_margin((frame.size().height - 9) / 2)
             .split(frame.size());
         let standard_font = FIGfont::standand().unwrap();
@@ -113,29 +183,40 @@ impl App {
         let digit_box = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded);
-        for (i, digit) in self.digits.into_iter().enumerate() {
-            let figure = standard_font.convert(&format!("{}", digit.current_time)).unwrap();
-            frame.render_widget(Paragraph::new(format!("\n{}", figure)).alignment(Alignment::Center).block(digit_box.clone()), chunks[i]);
-            if self.digits[i].transition > 0 {
-                let mut direction = Direction::Vertical;
-                if (self.direction[i] % 2) == 1 {
-                    direction = Direction::Horizontal;
-                }
-                let (constraint, chunk_index) = {
-                    let constraint =  min(((100 * digit.transition) / digit.transition_timing) as u16, 100);
-                    if self.direction[i] > 1 {
-                        ([Constraint::Percentage(100 - constraint), Constraint::Percentage(constraint)], 1)
-                    } else {
-                        ([Constraint::Percentage(constraint), Constraint::Percentage(0)], 0)
-                    }
+        let mut i = 0;
+        for tokens in &self.animated_time.format_tokens {
+            for block in &tokens.blocks {
+                let figure = match standard_font.convert(&block.curr_token) {
+                    Some(figure) => figure,
+                    None => standard_font.convert(" ").unwrap()
                 };
-                let chunks = Layout::default()
-                    .direction(direction)
-                    .constraints(constraint)
-                    .split(chunks[i]);
-                frame.render_widget(Clear, chunks[chunk_index]);
-                let figure = standard_font.convert(&format!("{}", digit.new_time)).unwrap().to_string();
-                frame.render_widget(Paragraph::new(format!("\n{}", figure)).alignment(Alignment::Center).block(transition_box.clone()), chunks[chunk_index]);
+                let mut widget = Paragraph::new(format!("\n{}", figure)).alignment(Alignment::Center);
+                if !block.is_constant  {
+                    widget = widget.block(digit_box.clone());
+                }
+                frame.render_widget(widget, chunks[i]);
+                if block.transition_progress > 0 {
+                    let mut direction = Direction::Vertical;
+                    if (self.direction % 2) == 1 {
+                        direction = Direction::Horizontal;
+                    }
+                    let (constraint, chunk_index) = {
+                        let constraint =  (((100 * block.transition_progress) / block.transition_timing) as u16).min(100);
+                        if self.direction > 1 {
+                            ([Constraint::Percentage(100 - constraint), Constraint::Percentage(constraint)], 1)
+                        } else {
+                            ([Constraint::Percentage(constraint), Constraint::Percentage(0)], 0)
+                        }
+                    };
+                    let chunks = Layout::default()
+                        .direction(direction)
+                        .constraints(constraint)
+                        .split(chunks[i]);
+                    frame.render_widget(Clear, chunks[chunk_index]);
+                    let figure = standard_font.convert(&block.new_token).unwrap().to_string();
+                    frame.render_widget(Paragraph::new(format!("\n{}", figure)).alignment(Alignment::Center).block(transition_box.clone()), chunks[chunk_index]);
+                }
+                i += 1
             }
         }
     }

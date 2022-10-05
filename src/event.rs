@@ -31,7 +31,7 @@ pub struct EventHandler {
     /// Event handler thread.
     handlers: [thread::JoinHandle<()>; 2],
 
-    transitioning: Arc<(Mutex<bool>, Condvar)>,
+    is_animating: Arc<(Mutex<bool>, Condvar)>,
 }
 
 impl EventHandler {
@@ -40,7 +40,7 @@ impl EventHandler {
         let tick_rate = Duration::from_millis(tick_rate);
         let render_tick_rate = Duration::from_millis(render_tick_rate);
         let (sender, receiver) = mpsc::channel();
-        let transitioning = Arc::new((Mutex::new(false), Condvar::new()));
+        let is_animating = Arc::new((Mutex::new(false), Condvar::new()));
         let handlers = [
             {
                 let mut last_tick = Instant::now();
@@ -72,15 +72,15 @@ impl EventHandler {
                 })
             },
             {
-                let transitioning = transitioning.clone();
+                let is_animating = is_animating.clone();
                 let sender = sender.clone();
                 let mut last_tick = Instant::now();
                 thread::spawn(move || {
-                    let (transitioning, cvar) = &*transitioning;
+                    let (is_animating, cvar) = &*is_animating;
                     loop {
-                        drop(cvar.wait(transitioning.lock().unwrap()).unwrap());
+                        drop(cvar.wait(is_animating.lock().unwrap()).unwrap());
                         last_tick = Instant::now();
-                        while *transitioning.lock().unwrap() {
+                        while *is_animating.lock().unwrap() {
                             if last_tick.elapsed() >= render_tick_rate {
                                 sender.send(Event::RenderTick(last_tick.elapsed())).expect("failed to send tick event");
                                 last_tick = Instant::now();
@@ -94,7 +94,7 @@ impl EventHandler {
             sender,
             receiver,
             handlers,
-            transitioning
+            is_animating
         }
     }
 
@@ -106,12 +106,12 @@ impl EventHandler {
         Ok(self.receiver.recv()?)
     }
 
-    pub fn transitioning(&self, new_transitioning: bool) {
-        let (transitioning, cvar) = &*self.transitioning;
-        let mut transitioning = transitioning.lock().unwrap();
-        if !*transitioning && new_transitioning {
+    pub fn trigger_animation(&self, new_state: bool) {
+        let (is_animating, cvar) = &*self.is_animating;
+        let mut transitioning = is_animating.lock().unwrap();
+        if !*transitioning && new_state {
             cvar.notify_one();
         }
-        *transitioning = new_transitioning;
+        *transitioning = new_state;
     }
 }

@@ -190,11 +190,10 @@ impl App {
                     Some(figure) => figure,
                     None => standard_font.convert(" ").unwrap()
                 };
-                let mut widget = Paragraph::new(format!("\n{}", figure)).alignment(Alignment::Center);
-                if !block.is_constant  {
-                    widget = widget.block(digit_box.clone());
+                frame.render_widget(Paragraph::new(format!("\n\n{}", figure)).alignment(Alignment::Center), chunks[i]);
+                if !block.is_constant {
+                    frame.render_widget(digit_box.clone(), chunks[i]);
                 }
-                frame.render_widget(widget, chunks[i]);
                 if block.transition_progress > 0 {
                     let mut direction = Direction::Vertical;
                     if (self.direction % 2) == 1 {
@@ -214,7 +213,8 @@ impl App {
                         .split(chunks[i]);
                     frame.render_widget(Clear, chunks[chunk_index]);
                     let figure = standard_font.convert(&block.new_token).unwrap().to_string();
-                    frame.render_widget(Paragraph::new(format!("\n{}", figure)).alignment(Alignment::Center).block(transition_box.clone()), chunks[chunk_index]);
+                    frame.render_widget(transition_box.clone(), chunks[chunk_index]);
+                    frame.render_widget(Paragraph::new(format!("\n\n{}", figure)).alignment(Alignment::Center), chunks[chunk_index]);
                 }
                 i += 1
             }
